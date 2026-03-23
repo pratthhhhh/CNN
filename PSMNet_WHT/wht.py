@@ -197,6 +197,16 @@ class WHTConv2D(torch.nn.Module):
             for _ in range(self.pods)
         ])
 
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        """Dynamically instantiate log_v if it exists in the checkpoint."""
+        v0_key = prefix + "log_v.0"
+        if v0_key in state_dict:
+            shape = state_dict[v0_key].shape
+            if self.log_v is None or self.log_v[0].shape != shape:
+                device = self.conv.weight.device
+                self._init_log_v(shape[0], shape[1], device)
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+
     # ------------------------------------------------------------------
     # Forward
     # ------------------------------------------------------------------
