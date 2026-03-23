@@ -18,7 +18,6 @@ import torch.nn as nn
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.utils.data as data
-from torch.autograd import Variable
 import torch.nn.functional as F
 from PIL import Image
 
@@ -122,9 +121,9 @@ def build_model(maxdisp=MAXDISP):
 def train(model, optimizer, imgL, imgR, disp_L):
     model.train()
 
-    imgL   = Variable(torch.FloatTensor(imgL)).cuda()
-    imgR   = Variable(torch.FloatTensor(imgR)).cuda()
-    disp_L = Variable(torch.FloatTensor(disp_L)).cuda()
+    imgL   = imgL.float().cuda()
+    imgR   = imgR.float().cuda()
+    disp_L = disp_L.float().cuda()
 
     mask = disp_L < MAXDISP
     mask.detach_()
@@ -136,22 +135,22 @@ def train(model, optimizer, imgL, imgR, disp_L):
     output2 = torch.squeeze(output2, 1)
     output3 = torch.squeeze(output3, 1)
 
-    loss = (0.5 * F.smooth_l1_loss(output1[mask], disp_L[mask], size_average=True)
-          + 0.7 * F.smooth_l1_loss(output2[mask], disp_L[mask], size_average=True)
-          + F.smooth_l1_loss(     output3[mask], disp_L[mask], size_average=True))
+    loss = (0.5 * F.smooth_l1_loss(output1[mask], disp_L[mask], reduction='mean')
+          + 0.7 * F.smooth_l1_loss(output2[mask], disp_L[mask], reduction='mean')
+          +       F.smooth_l1_loss(output3[mask], disp_L[mask], reduction='mean'))
 
     loss.backward()
     optimizer.step()
 
-    return loss.data.item()
+    return loss.item()
 
 
 def test(model, imgL, imgR, disp_true):
     model.eval()
 
-    imgL      = Variable(torch.FloatTensor(imgL)).cuda()
-    imgR      = Variable(torch.FloatTensor(imgR)).cuda()
-    disp_true = disp_true.cuda()
+    imgL      = imgL.float().cuda()
+    imgR      = imgR.float().cuda()
+    disp_true = disp_true.float().cuda()
 
     mask = disp_true < MAXDISP
     mask.detach_()
@@ -160,12 +159,15 @@ def test(model, imgL, imgR, disp_true):
         output3 = model(imgL, imgR)
         output3 = torch.squeeze(output3, 1)
 
-    loss = F.smooth_l1_loss(output3[mask], disp_true[mask], size_average=True)
-    return loss.data.item()
+    loss = F.smooth_l1_loss(output3[mask], disp_true[mask], reduction='mean')
+    return loss.item()
 
 
 # ─────────────────────── Main ────────────────────────────────────────────────
 def main():
+    print(f'==> Using device: {torch.cuda.get_device_name(0)} (CUDA {torch.version.cuda})')
+    print(f'==> GPUs available: {torch.cuda.device_count()}')
+
     # Reproducibility
     torch.manual_seed(SEED)
     torch.cuda.manual_seed(SEED)
@@ -207,8 +209,11 @@ def main():
         batch_size=BATCH_TEST,  shuffle=False, num_workers=2, drop_last=False)
 
     # ── Model & optimizer ─────────────────────────────────────────────────
+    print(f'==> Building PSMNet (maxdisp={MAXDISP}) ...')
     model     = build_model(MAXDISP)
     optimizer = optim.Adam(model.parameters(), lr=LR, betas=(0.9, 0.999))
+    print(f'==> Model ready. Training samples: {len(train_left_img)}, Val samples: {len(test_left_img)}')
+    print(f'==> Starting {EPOCHS} epochs ...')
 
     os.makedirs(SAVEMODEL, exist_ok=True)
     best_val_loss = float('inf')
