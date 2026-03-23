@@ -29,7 +29,8 @@ from dataloader import preprocess
 DATAPATH    = '/mnt/c/Users/prath/OneDrive/Desktop/Assignments/Thesis/Dataset/CARLA'
 SAVEMODEL   = '/mnt/c/Users/prath/OneDrive/Desktop/Assignments/Thesis/CNN/PSMNet/checkpoints'
 MAXDISP     = 192
-EPOCHS      = 5
+EPOCHS      = 50
+PATIENCE    = 5
 BATCH_TRAIN = 4
 BATCH_TEST  = 2
 LR          = 0.001
@@ -112,7 +113,6 @@ class MyImageFloder(data.Dataset):
 def build_model(maxdisp=MAXDISP):
     from models.stackhourglass import PSMNet as StackPSM
     model = StackPSM(maxdisp)
-    model = nn.DataParallel(model)
     model.cuda()
     return model
 
@@ -217,9 +217,10 @@ def main():
 
     os.makedirs(SAVEMODEL, exist_ok=True)
     best_val_loss = float('inf')
+    epochs_no_improve = 0
     start_epoch   = 1
 
-    # ── Training loop ─────────────────────────────────────────────────────
+    # ── Training loop ─────────────────────────────────────────────────────────
     start_full_time = time.time()
 
     for epoch in range(start_epoch, EPOCHS + 1):
@@ -249,6 +250,7 @@ def main():
         # Save best checkpoint
         if avg_test_loss < best_val_loss:
             best_val_loss = avg_test_loss
+            epochs_no_improve = 0
             savefilename  = os.path.join(SAVEMODEL, 'best_checkpoint.tar')
             torch.save({
                 'epoch':      epoch,
@@ -258,6 +260,12 @@ def main():
                 'test_loss':  avg_test_loss,
             }, savefilename)
             print(f'Saved best model at epoch {epoch} with val loss {avg_test_loss:.3f}')
+        else:
+            epochs_no_improve += 1
+            print(f'Validation loss did not improve. Patience: {epochs_no_improve}/{PATIENCE}')
+            if epochs_no_improve >= PATIENCE:
+                print('Early stopping triggered!')
+                break
 
     print(f'Full training time = {(time.time() - start_full_time) / 3600:.2f} HR')
 
