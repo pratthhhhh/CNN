@@ -181,10 +181,10 @@ def main():
 
     # ── Output dir ───────────────────────────────────────────────────────────
     os.makedirs(os.path.join(OUTPUT_DIR, 'disp_png'), exist_ok=True)
-    os.makedirs(os.path.join(OUTPUT_DIR, 'disp_npy'), exist_ok=True)
 
     # ── Inference loop ────────────────────────────────────────────────────────
     all_epe, all_bp05, all_bp10, all_times = [], [], [], []
+    saved_pngs = 0
 
     # Warm up GPU (avoid cold-start timing bias)
     with torch.no_grad():
@@ -228,20 +228,17 @@ def main():
                     batch_epe.append(metrics['epe'])
 
                 # Save disparity  ─────────────────────────────────────────────
-                stem = os.path.splitext(fname[b])[0]
-
-                # .npy (raw float32)
-                np.save(os.path.join(OUTPUT_DIR, 'disp_npy', f'{stem}.npy'), диsp)
-
-                # .png (colour-mapped, 0–MAXDISP range)
-                fig, ax = plt.subplots(figsize=(диsp.shape[1] / 100, диsp.shape[0] / 100), dpi=100)
-                im = ax.imshow(диsp, cmap='plasma', vmin=0, vmax=MAXDISP)
-                plt.colorbar(im, ax=ax, fraction=0.015, pad=0.02)
-                ax.axis('off')
-                ax.set_title(f'EPE={metrics["epe"]:.2f}  BP@1.0={metrics["bp10"]:.1f}%', fontsize=8)
-                fig.tight_layout(pad=0.1)
-                fig.savefig(os.path.join(OUTPUT_DIR, 'disp_png', f'{stem}.png'), dpi=100)
-                plt.close(fig)
+                if saved_pngs < 5:
+                    stem = os.path.splitext(fname[b])[0]
+                    fig, ax = plt.subplots(figsize=(диsp.shape[1] / 100, диsp.shape[0] / 100), dpi=100)
+                    im = ax.imshow(диsp, cmap='plasma', vmin=0, vmax=MAXDISP)
+                    plt.colorbar(im, ax=ax, fraction=0.015, pad=0.02)
+                    ax.axis('off')
+                    ax.set_title(f'EPE={metrics["epe"]:.2f}  BP@1.0={metrics["bp10"]:.1f}%', fontsize=8)
+                    fig.tight_layout(pad=0.1)
+                    fig.savefig(os.path.join(OUTPUT_DIR, 'disp_png', f'{stem}.png'), dpi=100)
+                    plt.close(fig)
+                    saved_pngs += 1
 
             # Print every batch
             avg_epe = np.nanmean(batch_epe) if batch_epe else float('nan')
