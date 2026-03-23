@@ -36,7 +36,7 @@ CHECKPOINT  = '/mnt/c/Users/prath/OneDrive/Desktop/Assignments/Thesis/CNN/PSMNet
 DATAPATH    = '/mnt/c/Users/prath/OneDrive/Desktop/Assignments/Thesis/Dataset/CARLA'
 OUTPUT_DIR  = '/mnt/c/Users/prath/OneDrive/Desktop/Assignments/Thesis/CNN/PSMNet/inference_output'
 MAXDISP     = 192
-BATCH_SIZE  = 1       # keep at 1 for fair per-image timing
+BATCH_SIZE  = 8       # Increased to 8 to utilize GPU faster
 SEED        = 1
 
 # Input size used for GFLOPs calculation
@@ -203,41 +203,51 @@ def main():
             t0 = time.perf_counter()
             pred = model(imgL, imgR)
             torch.cuda.synchronize()
-            elapsed = time.perf_counter() - t0
-            all_times.append(elapsed)
+            
+            # Time spent per image in this batch
+            elapsed_per_img = (time.perf_counter() - t0) / imgL.size(0)
             # -------------------------------------------------------------
 
-            pred = torch.squeeze(pred, 1)         # (B, H, W)
-            диsp = pred[0].cpu().numpy()           # single image
+            if pred.dim() == 4:
+                pred = torch.squeeze(pred, 1)         # (B, H, W)
+            
+            batch_epe = []
 
-            # Metrics
-            metrics = compute_metrics(pred[0], disp_gt[0])
-            all_epe.append(metrics['epe'])
-            all_bp05.append(metrics['bp05'])
-            all_bp10.append(metrics['bp10'])
+            # Loop through all images in the batch
+            for b in range(imgL.size(0)):
+                диsp = pred[b].cpu().numpy()
 
-            # Save disparity  ─────────────────────────────────────────────
-            stem = os.path.splitext(fname[0])[0]
+                all_times.append(elapsed_per_img)
 
-            # .npy (raw float32)
-            np.save(os.path.join(OUTPUT_DIR, 'disp_npy', f'{stem}.npy'), диsp)
+                # Metrics
+                metrics = compute_metrics(pred[b], disp_gt[b])
+                if not np.isnan(metrics['epe']):
+                    all_epe.append(metrics['epe'])
+                    all_bp05.append(metrics['bp05'])
+                    all_bp10.append(metrics['bp10'])
+                    batch_epe.append(metrics['epe'])
 
-            # .png (colour-mapped, 0–MAXDISP range)
-            fig, ax = plt.subplots(figsize=(диsp.shape[1] / 100, диsp.shape[0] / 100), dpi=100)
-            im = ax.imshow(диsp, cmap='plasma', vmin=0, vmax=MAXDISP)
-            plt.colorbar(im, ax=ax, fraction=0.015, pad=0.02)
-            ax.axis('off')
-            ax.set_title(f'EPE={metrics["epe"]:.2f}  BP@1.0={metrics["bp10"]:.1f}%', fontsize=8)
-            fig.tight_layout(pad=0.1)
-            fig.savefig(os.path.join(OUTPUT_DIR, 'disp_png', f'{stem}.png'), dpi=100)
-            plt.close(fig)
+                # Save disparity  ─────────────────────────────────────────────
+                stem = os.path.splitext(fname[b])[0]
 
-            if (i + 1) % 10 == 0 or i == 0:
-                print(f'  [{i+1:4d}/{len(loader)}]  '
-                      f'EPE={metrics["epe"]:.3f}  '
-                      f'BP@0.5={metrics["bp05"]:.2f}%  '
-                      f'BP@1.0={metrics["bp10"]:.2f}%  '
-                      f'time={elapsed*1000:.1f} ms')
+                # .npy (raw float32)
+                np.save(os.path.join(OUTPUT_DIR, 'disp_npy', f'{stem}.npy'), диsp)
+
+                # .png (colour-mapped, 0–MAXDISP range)
+                fig, ax = plt.subplots(figsize=(диsp.shape[1] / 100, диsp.shape[0] / 100), dpi=100)
+                im = ax.imshow(диsp, cmap='plasma', vmin=0, vmax=MAXDISP)
+                plt.colorbar(im, ax=ax, fraction=0.015, pad=0.02)
+                ax.axis('off')
+                ax.set_title(f'EPE={metrics["epe"]:.2f}  BP@1.0={metrics["bp10"]:.1f}%', fontsize=8)
+                fig.tight_layout(pad=0.1)
+                fig.savefig(os.path.join(OUTPUT_DIR, 'disp_png', f'{stem}.png'), dpi=100)
+                plt.close(fig)
+
+            # Print every batch
+            avg_epe = np.nanmean(batch_epe) if batch_epe else float('nan')
+            print(f'  Batch [{i+1:3d}/{len(loader)}] ({imgL.size(0)} imgs) '
+                  f'Avg EPE={avg_epe:.3f}  '
+                  f'Time/img={elapsed_per_img*1000:.1f} ms')
 
     # ── Summary ───────────────────────────────────────────────────────────────
     mean_epe  = np.nanmean(all_epe)
