@@ -106,29 +106,67 @@ class WHTConv2D(torch.nn.Module):
         self.residual = residual
         
         
+    def _adapt_param(self, param, target_h, target_w):
+        """Bilinearly interpolate a 2-D learnable parameter to (target_h, target_w).
+
+        During training the sizes match so this is never called (zero cost).
+        At test time with a different image size the spectral-domain parameters
+        are smoothly resampled to the new padded dimensions.
+        """
+        # param shape: (h, w) → (1, 1, h, w) for F.interpolate
+        return torch.nn.functional.interpolate(
+            param.unsqueeze(0).unsqueeze(0),
+            size=(target_h, target_w),
+            mode='bilinear', align_corners=False
+        ).squeeze(0).squeeze(0)
+
     def forward(self, x):
         height, width = x.shape[-2:]
-        if height!= self.height or width!=self.width:
-            raise Exception('({}, {})!=({}, {})'.format(height, width, self.height, self.width))
-     
+
+        # Dynamic padding to next power of 2 for the *actual* input size
+        h_pad = find_min_power(height)
+        w_pad = find_min_power(width)
+
         f0 = x
-        if self.width_pad>self.width or self.height_pad>self.height:
-            f0 = torch.nn.functional.pad(f0, (0, self.width_pad-self.width, 0, self.height_pad-self.height))
-        
+        if h_pad > height or w_pad > width:
+            f0 = torch.nn.functional.pad(f0, (0, w_pad - width, 0, h_pad - height))
+
+        # Forward WHT along both spatial axes
         f1 = fwht(f0, axis=-1, fast=True)
         f2 = fwht(f1, axis=-2, fast=True)
-        
-        f3 = [self.v[i]*f2 for i in range(self.pods)]
-        f4 = [self.conv[i](f3[i]) for i in range(self.pods)]
-        f5 = [self.ST[i](f4[i]) for i in range(self.pods)]
-        
-        f6 = torch.stack(f5, dim=-1).sum(dim=-1)
-        
+
+        # Check whether we need to adapt spectral parameters
+        need_adapt = (h_pad != self.height_pad or w_pad != self.width_pad)
+
+        f5_list = []
+        for i in range(self.pods):
+            # Spectral weighting
+            v_i = self._adapt_param(self.v[i], h_pad, w_pad) if need_adapt else self.v[i]
+            f3 = v_i * f2
+
+            # 1×1 channel mixing (spatially agnostic, no adaptation needed)
+            f4 = self.conv[i](f3)
+
+            # Soft thresholding
+            if need_adapt:
+                T_i = self._adapt_param(self.ST[i].T, h_pad, w_pad)
+                f5 = torch.copysign(
+                    torch.nn.functional.relu(torch.abs(f4) - torch.nn.functional.relu(T_i)),
+                    f4)
+            else:
+                f5 = self.ST[i](f4)
+
+            f5_list.append(f5)
+
+        f6 = torch.stack(f5_list, dim=-1).sum(dim=-1)
+
+        # Inverse WHT
         f7 = ifwht(f6, axis=-1, fast=True)
         f8 = ifwht(f7, axis=-2, fast=True)
-        
-        y = f8[..., :self.height, :self.width]
-        
+
+        # Crop back to original spatial size
+        y = f8[..., :height, :width]
+
         if self.residual:
             y = y + x
         return y
