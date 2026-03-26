@@ -211,6 +211,18 @@ def main():
     # ── Model & optimizer ─────────────────────────────────────────────────
     print(f'==> Building PSMNet (maxdisp={MAXDISP}) ...')
     model     = build_model(MAXDISP)
+
+    # Enable TF32 on Ampere+ GPUs (~3x faster matmul/conv at ~FP16 precision)
+    torch.set_float32_matmul_precision('high')
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32       = True
+
+    # Compile the full model — fuses WHT butterfly + all ops into minimal
+    # CUDA kernels.  First few iterations are slow (compilation warmup).
+    if hasattr(torch, 'compile'):
+        print('==> Compiling model with torch.compile ...')
+        model = torch.compile(model)
+
     optimizer = optim.Adam(model.parameters(), lr=LR, betas=(0.9, 0.999))
     print(f'==> Model ready. Training samples: {len(train_left_img)}, Val samples: {len(test_left_img)}')
     print(f'==> Starting {EPOCHS} epochs ...')
